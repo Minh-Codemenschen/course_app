@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'debug_file_test.dart';
 
 class DebugPage extends StatefulWidget {
   const DebugPage({super.key});
@@ -86,6 +87,16 @@ class _DebugPageState extends State<DebugPage> {
             onPressed: _checkAssets,
           ),
         ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => const DebugFileTest()),
+          );
+        },
+        child: const Icon(Icons.folder),
+        tooltip: 'File Service Test',
       ),
       body: isLoading
           ? const Center(child: CircularProgressIndicator())
