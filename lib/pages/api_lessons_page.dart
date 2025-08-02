@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../models/lesson.dart';
 import '../widgets/download_manager.dart';
+import '../widgets/download_summary.dart';
 
 class ApiLessonsPage extends StatefulWidget {
   const ApiLessonsPage({super.key});
@@ -67,72 +68,32 @@ class _ApiLessonsPageState extends State<ApiLessonsPage> {
   }
 
   Future<void> _downloadAllLessons() async {
+    // Calculate total files to download
+    int totalFiles = 0;
+    for (Lesson lesson in _lessons) {
+      totalFiles += lesson.audio.length;
+      if (lesson.pdf != null) totalFiles++;
+    }
+
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const AlertDialog(
-        content: Row(
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(width: 16),
-            Text('Downloading all lessons...'),
-          ],
-        ),
+      builder: (context) => BulkDownloadDialog(
+        totalLessons: _lessons.length,
+        totalFiles: totalFiles,
+        lessons: _lessons,
       ),
     );
-
-    try {
-      int downloadedCount = 0;
-      for (Lesson lesson in _lessons) {
-        try {
-          Map<String, dynamic> lessonMap = {
-            'name': lesson.name,
-            'pdf': lesson.pdf,
-            'audio': lesson.audio,
-          };
-
-          await ApiService.downloadLessonFiles(lessonMap);
-          downloadedCount++;
-        } catch (e) {
-          // ignore: avoid_print
-          print('Failed to download ${lesson.name}: $e');
-        }
-      }
-
-      if (mounted) {
-        Navigator.of(context).pop(); // Close loading dialog
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Downloaded $downloadedCount out of ${_lessons.length} lessons'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        Navigator.of(context).pop(); // Close loading dialog
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Download failed: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Course Lessons'),
-        backgroundColor: Colors.blue,
+        title: const Text('API Lessons'),
+        backgroundColor: const Color(0xFF3b3ec3),
         foregroundColor: Colors.white,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadLessons,
-          ),
           IconButton(
             icon: const Icon(Icons.download),
             onPressed: _downloadAllLessons,
@@ -146,16 +107,7 @@ class _ApiLessonsPageState extends State<ApiLessonsPage> {
 
   Widget _buildBody() {
     if (_isLoading) {
-      return const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text('Loading lessons from API...'),
-          ],
-        ),
-      );
+      return const Center(child: CircularProgressIndicator());
     }
 
     if (_error != null) {
@@ -163,11 +115,7 @@ class _ApiLessonsPageState extends State<ApiLessonsPage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(
-              Icons.error_outline,
-              size: 64,
-              color: Colors.red,
-            ),
+            const Icon(Icons.error, size: 64, color: Colors.red),
             const SizedBox(height: 16),
             Text(
               'Error loading lessons',
@@ -177,7 +125,7 @@ class _ApiLessonsPageState extends State<ApiLessonsPage> {
             Text(
               _error!,
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium,
+              style: TextStyle(color: Colors.grey[600]),
             ),
             const SizedBox(height: 16),
             ElevatedButton(
@@ -195,39 +143,212 @@ class _ApiLessonsPageState extends State<ApiLessonsPage> {
       );
     }
 
-    return Column(
+    return ListView(
+      padding: const EdgeInsets.all(8.0),
       children: [
-        Container(
-          padding: const EdgeInsets.all(16),
-          color: Colors.grey[100],
-          child: Row(
+        // Download Summary
+        DownloadSummary(
+          lessons: _lessons,
+          onRefresh: () {
+            setState(() {
+              // Refresh the page
+            });
+          },
+        ),
+        
+        // Individual lesson download managers
+        ..._lessons.map((lesson) => DownloadManager(
+          lesson: lesson,
+          onDownloadComplete: () {
+            // Optionally refresh the list or update UI
+          },
+        )),
+      ],
+    );
+  }
+}
+
+class BulkDownloadDialog extends StatefulWidget {
+  final int totalLessons;
+  final int totalFiles;
+  final List<Lesson> lessons;
+
+  const BulkDownloadDialog({
+    Key? key,
+    required this.totalLessons,
+    required this.totalFiles,
+    required this.lessons,
+  }) : super(key: key);
+
+  @override
+  State<BulkDownloadDialog> createState() => _BulkDownloadDialogState();
+}
+
+class _BulkDownloadDialogState extends State<BulkDownloadDialog> {
+  int _downloadedLessons = 0;
+  int _downloadedFiles = 0;
+  String _currentLesson = '';
+  String _currentFile = '';
+  bool _isDownloading = false;
+  List<String> _failedLessons = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _startDownload();
+  }
+
+  Future<void> _startDownload() async {
+    setState(() {
+      _isDownloading = true;
+    });
+
+    for (int i = 0; i < widget.lessons.length; i++) {
+      final lesson = widget.lessons[i];
+      
+      setState(() {
+        _currentLesson = lesson.name;
+      });
+
+      try {
+        // Convert lesson to Map for API service
+        Map<String, dynamic> lessonMap = {
+          'name': lesson.name,
+          'pdf': lesson.pdf,
+          'audio': lesson.audio,
+        };
+
+        // Download all files for this lesson
+        final downloadedFiles = await ApiService.downloadLessonFiles(lessonMap);
+        
+        setState(() {
+          _downloadedFiles += downloadedFiles.length;
+          _downloadedLessons++;
+        });
+
+      } catch (e) {
+        setState(() {
+          _failedLessons.add('${lesson.name}: ${e.toString()}');
+        });
+      }
+    }
+
+    setState(() {
+      _isDownloading = false;
+    });
+
+    // Show completion dialog
+    if (mounted) {
+      _showCompletionDialog();
+    }
+  }
+
+  void _showCompletionDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(
+              _failedLessons.isEmpty ? Icons.check_circle : Icons.warning,
+              color: _failedLessons.isEmpty ? Colors.green : Colors.orange,
+            ),
+            const SizedBox(width: 8),
+            Text(_failedLessons.isEmpty ? 'Download Complete' : 'Download Finished'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Successfully downloaded:'),
+            Text('• $_downloadedLessons lessons', style: const TextStyle(fontWeight: FontWeight.bold)),
+            Text('• $_downloadedFiles files', style: const TextStyle(fontWeight: FontWeight.bold)),
+            if (_failedLessons.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              const Text('Failed downloads:', style: TextStyle(color: Colors.red)),
+              ..._failedLessons.map((failure) => Text('• $failure', style: const TextStyle(fontSize: 12))),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop(); // Close completion dialog
+              Navigator.of(context).pop(); // Close bulk download dialog
+            },
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Downloading All Lessons'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Progress info
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Icon(Icons.info_outline),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Total lessons: ${_lessons.length}',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-              ),
+              Text('Lessons: $_downloadedLessons/${widget.totalLessons}'),
+              Text('Files: $_downloadedFiles/${widget.totalFiles}'),
             ],
           ),
-        ),
-        Expanded(
-          child: ListView.builder(
-            itemCount: _lessons.length,
-            itemBuilder: (context, index) {
-              final lesson = _lessons[index];
-              return DownloadManager(
-                lesson: lesson,
-                onDownloadComplete: () {
-                  // Refresh the list to update download status
-                  setState(() {});
-                },
-              );
-            },
+          const SizedBox(height: 16),
+          
+          // Progress bar
+          LinearProgressIndicator(
+            value: widget.totalLessons > 0 ? _downloadedLessons / widget.totalLessons : 0,
+            backgroundColor: Colors.grey[300],
+            valueColor: const AlwaysStoppedAnimation<Color>(Colors.blue),
+            minHeight: 8,
           ),
-        ),
+          const SizedBox(height: 16),
+          
+          // Current lesson info
+          if (_currentLesson.isNotEmpty) ...[
+            Row(
+              children: [
+                Icon(Icons.folder, size: 16, color: Colors.grey[600]),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _currentLesson,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey[700],
+                      fontWeight: FontWeight.w500,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+          ],
+          
+          // Status text
+          Text(
+            _isDownloading ? 'Downloading...' : 'Complete!',
+            style: TextStyle(
+              fontSize: 12,
+              color: _isDownloading ? Colors.blue : Colors.green,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        if (!_isDownloading)
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
       ],
     );
   }

@@ -8,6 +8,11 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'debug_page.dart';
 import 'pages/api_lessons_page.dart';
 import 'services/api_service.dart';
+import 'services/file_service.dart';
+import 'widgets/file_handler.dart';
+import 'widgets/download_manager.dart';
+import 'widgets/cross_platform_pdf_viewer.dart';
+import 'models/lesson.dart';
 
 class WelcomePage extends StatefulWidget {
   const WelcomePage({super.key});
@@ -2417,53 +2422,13 @@ class _WelcomePageState extends State<WelcomePage> {
 
 
 
-  // Function to download a lesson
-  Future<void> _downloadLesson(Map<String, dynamic> lesson, BuildContext context) async {
-    // Show loading dialog
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        content: Row(
-          children: [
-            const CircularProgressIndicator(),
-            const SizedBox(width: 16),
-            Text('Downloading ${lesson['name']}...'),
-          ],
-        ),
-      ),
+  // Convert lesson data to Lesson model
+  Lesson _convertToLessonModel(Map<String, dynamic> lessonData) {
+    return Lesson(
+      name: lessonData['name'],
+      pdf: lessonData['pdf'],
+      audio: List<String>.from(lessonData['audio'] ?? []),
     );
-
-    try {
-      // Download lesson files using API service
-      await ApiService.downloadLessonFiles(lesson);
-
-      // Close loading dialog
-      if (context.mounted) {
-        Navigator.of(context).pop();
-
-        // Show success message
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${lesson['name']} downloaded successfully!'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      // Close loading dialog
-      if (context.mounted) {
-        Navigator.of(context).pop();
-
-        // Show error message
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to download ${lesson['name']}: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
   }
 
   @override
@@ -2517,39 +2482,16 @@ class _WelcomePageState extends State<WelcomePage> {
                           // Buttons row
                           Row(
                             children: [
-                              // Download button
+                              // Download Manager (Compact Mode)
                               Expanded(
                                 flex: 2,
-                                child: ElevatedButton(
-                                  onPressed: () {
-                                    _downloadLesson(lesson, context);
+                                child: DownloadManager(
+                                  lesson: _convertToLessonModel(lesson),
+                                  compact: true, // Use compact mode
+                                  onDownloadComplete: () {
+                                    // Refresh UI after download
+                                    setState(() {});
                                   },
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.green,
-                                    foregroundColor: Colors.white,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 16,
-                                      horizontal: 12,
-                                    ),
-                                    elevation: 0,
-                                  ),
-                                  child: const Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(Icons.download, size: 16),
-                                      SizedBox(width: 4),
-                                      Text(
-                                        'Download',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
                                 ),
                               ),
                               const SizedBox(width: 8),
@@ -2840,6 +2782,12 @@ class _AudioPlayerPageState extends State<AudioPlayerPage> {
           _audioError = null;
         });
 
+        // Get local file path using FileHandler
+        final localPath = await FileHandler.getAudioPath(audioPath, context);
+        if (localPath == null) {
+          return; // Error dialog already shown by FileHandler
+        }
+
         // If clicking the same audio that's currently playing, toggle pause/resume
         if (_currentAudioIndex == index && _isPlaying) {
           await _audioPlayer.pause();
@@ -2854,7 +2802,9 @@ class _AudioPlayerPageState extends State<AudioPlayerPage> {
               _currentAudioIndex = index;
             });
           }
-          await _audioPlayer.play(AssetSource(audioPath));
+          
+          // Use DeviceFileSource for local files
+          await _audioPlayer.play(DeviceFileSource(localPath));
           setState(() {
             _isPlaying = true;
           });
@@ -3141,16 +3091,10 @@ class PDFViewPage extends StatelessWidget {
         body: const Center(child: Text('PDF-Anzeige nur auf Mobilgeräten unterstützt')),
       );
     } else {
-      // Mobile: dùng flutter_pdfview như cũ
+      // Mobile: sử dụng FileHandler để load PDF từ local storage
       return Scaffold(
-        appBar: AppBar(
-          title: Text('$lessonName - eBook'),
-          backgroundColor: const Color(0xFF3b3ec3),
-          foregroundColor: Colors.white,
-          elevation: 0,
-        ),
-        body: FutureBuilder<String>(
-          future: _copyAssetToTemp('$pdfAssetPath'),
+        body: FutureBuilder<String?>(
+          future: FileHandler.getPdfPath(pdfAssetPath, context),
           builder: (context, snapshot) {
             if (snapshot.connectionState != ConnectionState.done) {
               return const Center(child: CircularProgressIndicator());
@@ -3162,7 +3106,7 @@ class PDFViewPage extends StatelessWidget {
                   children: [
                     const Icon(Icons.error, size: 64, color: Colors.red),
                     const SizedBox(height: 16),
-                    Text('Fehler:  ${snapshot.error}'),
+                    Text('Fehler: ${snapshot.error}'),
                     const SizedBox(height: 16),
                     ElevatedButton(
                       onPressed: () {
@@ -3175,29 +3119,39 @@ class PDFViewPage extends StatelessWidget {
               );
             }
             if (!snapshot.hasData) {
-              return const Center(child: Text('PDF-Datei nicht gefunden'));
+              return Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.download, size: 64, color: Colors.blue),
+                    const SizedBox(height: 16),
+                    const Text('PDF-Datei nicht gefunden'),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Bitte laden Sie die Lektion herunter',
+                      style: TextStyle(color: Colors.grey[600]),
+                    ),
+                    const SizedBox(height: 16),
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                      },
+                      child: const Text('Zurück'),
+                    ),
+                  ],
+                ),
+              );
             }
-            return PDFView(
+            return CrossPlatformPdfViewer(
               filePath: snapshot.data!,
+              title: '$lessonName - eBook',
             );
           },
         ),
       );
     }
   }
-
-     Future<String> _copyAssetToTemp(String assetPath) async {
-     try {
-       final bytes = await rootBundle.load('assets/$assetPath');
-       final dir = await Directory.systemTemp.createTemp();
-       final file = File('${dir.path}/${assetPath.split('/').last}');
-       await file.writeAsBytes(bytes.buffer.asUint8List(), flush: true);
-       return file.path;
-     } catch (e) {
-       throw Exception('Fehler beim Laden der PDF-Datei: $e');
-     }
-   }
- }
+}
 
 class AudioOptionsPage extends StatelessWidget {
   final String lessonName;

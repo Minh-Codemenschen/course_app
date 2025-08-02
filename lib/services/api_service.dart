@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'file_service.dart';
 
 class ApiService {
   static const String baseUrl = 'https://codemenschen.at/course_app/';
@@ -35,37 +36,25 @@ class ApiService {
   // Download a file from the API
   static Future<String?> downloadFile(String filePath) async {
     try {
-      // Request storage permission
-      var status = await Permission.storage.status;
-      if (!status.isGranted) {
-        status = await Permission.storage.request();
+      // Request storage permission for Android
+      if (Platform.isAndroid) {
+        var status = await Permission.storage.status;
         if (!status.isGranted) {
-          throw Exception('Storage permission denied');
+          status = await Permission.storage.request();
+          if (!status.isGranted) {
+            throw Exception('Storage permission denied');
+          }
         }
       }
 
       // Create download URL
       final downloadUrl = '$baseUrl$filePath';
 
-      // Get the documents directory
-      Directory? directory;
-      if (Platform.isAndroid) {
-        directory = Directory('/storage/emulated/0/Download');
-        if (!await directory.exists()) {
-          directory = await getExternalStorageDirectory();
-        }
-      } else if (Platform.isIOS) {
-        directory = await getApplicationDocumentsDirectory();
-      } else {
-        directory = await getApplicationDocumentsDirectory();
-      }
-
-      if (directory == null) {
-        throw Exception('Could not access storage directory');
-      }
+      // Get the base path using FileService
+      final basePath = await FileService.getBasePath();
 
       // Create course_app folder if it doesn't exist
-      final courseAppDir = Directory('${directory.path}/course_app');
+      final courseAppDir = Directory(basePath);
       if (!await courseAppDir.exists()) {
         await courseAppDir.create(recursive: true);
       }
@@ -76,14 +65,14 @@ class ApiService {
       final folderPath = pathParts.sublist(0, pathParts.length - 1).join('/');
 
       // Create folder structure
-      final targetFolder = Directory('${courseAppDir.path}/$folderPath');
+      final targetFolder = Directory('$basePath/$folderPath');
       if (!await targetFolder.exists()) {
         await targetFolder.create(recursive: true);
       }
 
       final file = File('${targetFolder.path}/$fileName');
 
-            // Download the file
+      // Download the file
       final response = await http.get(Uri.parse(downloadUrl));
 
       if (response.statusCode == 200) {
@@ -133,57 +122,46 @@ class ApiService {
     return downloadedFiles;
   }
 
-  // Check if file exists locally
+  // Check if file exists locally using FileService
   static Future<bool> fileExistsLocally(String filePath) async {
-    try {
-      Directory? directory;
-      if (Platform.isAndroid) {
-        directory = Directory('/storage/emulated/0/Download');
-        if (!await directory.exists()) {
-          directory = await getExternalStorageDirectory();
-        }
-      } else if (Platform.isIOS) {
-        directory = await getApplicationDocumentsDirectory();
-      } else {
-        directory = await getApplicationDocumentsDirectory();
-      }
-
-      if (directory == null) return false;
-
-      final courseAppDir = Directory('${directory.path}/course_app');
-      final localPath = '${courseAppDir.path}/$filePath';
-      return await File(localPath).exists();
-    } catch (e) {
-      return false;
-    }
+    return await FileService.fileExists(filePath);
   }
 
-  // Get local file path
+  // Get local file path using FileService
   static Future<String?> getLocalFilePath(String filePath) async {
-    try {
-      Directory? directory;
-      if (Platform.isAndroid) {
-        directory = Directory('/storage/emulated/0/Download');
-        if (!await directory.exists()) {
-          directory = await getExternalStorageDirectory();
-        }
-      } else if (Platform.isIOS) {
-        directory = await getApplicationDocumentsDirectory();
-      } else {
-        directory = await getApplicationDocumentsDirectory();
+    return await FileService.getFilePath(filePath);
+  }
+
+  // Get lesson download status
+  static Future<Map<String, dynamic>> getLessonDownloadStatus(Map<String, dynamic> lesson) async {
+    bool isDownloaded = true;
+    List<String> missingFiles = [];
+
+    // Check PDF
+    if (lesson['pdf'] != null) {
+      final pdfExists = await FileService.fileExists(lesson['pdf']);
+      if (!pdfExists) {
+        isDownloaded = false;
+        missingFiles.add(lesson['pdf']);
       }
-
-      if (directory == null) return null;
-
-      final courseAppDir = Directory('${directory.path}/course_app');
-      final localPath = '${courseAppDir.path}/$filePath';
-
-      if (await File(localPath).exists()) {
-        return localPath;
-      }
-      return null;
-    } catch (e) {
-      return null;
     }
+
+    // Check audio files
+    if (lesson['audio'] != null) {
+      for (String audioFile in lesson['audio']) {
+        final audioExists = await FileService.fileExists(audioFile);
+        if (!audioExists) {
+          isDownloaded = false;
+          missingFiles.add(audioFile);
+        }
+      }
+    }
+
+    return {
+      'isDownloaded': isDownloaded,
+      'missingFiles': missingFiles,
+      'totalFiles': (lesson['pdf'] != null ? 1 : 0) + (lesson['audio']?.length ?? 0),
+      'downloadedFiles': (lesson['pdf'] != null ? 1 : 0) + (lesson['audio']?.length ?? 0) - missingFiles.length,
+    };
   }
 }
