@@ -1,0 +1,3 @@
+Hier findest du nochmal die Projektanfrage vom Februar als grobe Orientierung.
+
+Bei der Beschriftung der Buttons und Felder in der App: an den Datei- und Ordnernamen halten, z.B. "Hörtexte" (nicht wie in dem Anfragedokument: "Hörbeispiele"). Bei den eBook PDFs, genügt wahrscheinlich einfach eBook.
